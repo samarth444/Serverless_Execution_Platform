@@ -26,6 +26,9 @@ def get_db():
 @router.post("/functions/")
 def create_function(name: str, route: str, language: str, timeout: int, code: str, db: Session = Depends(get_db)):
     """ Store a function in the database """
+    if db.query(Function).filter(Function.name == name).first():
+        raise HTTPException(status_code=400, detail="Function with this name already exists")
+    
     new_function = Function(name=name, route=route, language=language, timeout=timeout, code=code)
     db.add(new_function)
     db.commit()
@@ -48,16 +51,26 @@ def execute_function(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Function not found")
 
     # Define image and file path based on language
-    if function.language.lower() == "python":
-        image = "python:3.9"
-        code_ext = "py"
-        run_command = f"python /tmp/function.{code_ext}"
-    elif function.language.lower() == "javascript":
-        image = "node:18"
-        code_ext = "js"
-        run_command = f"node /tmp/function.{code_ext}"
-    else:
+    language_config = {
+        "python": {
+            "image": "python:3.9",
+            "code_ext": "py",
+            "run_command": "python /tmp/function.py"
+        },
+        "javascript": {
+            "image": "node:18",
+            "code_ext": "js",
+            "run_command": "node /tmp/function.js"
+        }
+    }
+
+    if function.language.lower() not in language_config:
         raise HTTPException(status_code=400, detail="Unsupported language")
+
+    config = language_config[function.language.lower()]
+    image = config["image"]
+    code_ext = config["code_ext"]
+    run_command = config["run_command"]
 
     # Prepare the directory and file
     temp_dir = "./temp"
@@ -68,22 +81,26 @@ def execute_function(id: int, db: Session = Depends(get_db)):
         # Write function code to a temporary file
         with open(temp_filename, "w") as f:
             f.write(function.code)
-        
+
         logger.info(f"Executing function {function.id} in a {function.language} environment.")
 
-        # Run function inside a Docker container with timeout
+        # Run function inside a Docker container with proper syntax
         try:
-            output = client.containers.run(
+            container = client.containers.run(
                 image,
                 command=run_command,
                 volumes={os.path.abspath(temp_dir): {'bind': '/tmp', 'mode': 'rw'}},
-                detach=False,  # Run in foreground to capture output
+                detach=True,  # Run in background
                 remove=True,  # Remove container after execution
-                timeout=function.timeout  # Enforce execution timeout
+                stdout=True,
+                stderr=True
             )
-            logger.info(f"Function {function.id} executed successfully.")
-            return {"message": "Function executed successfully", "output": output.decode('utf-8')}
-        
+
+            logs = container.logs().decode("utf-8")  # Capture logs
+            logger.info(f"Function {function.id} executed successfully. Output:\n{logs}")
+
+            return {"message": "Function executed successfully", "output": logs}
+
         except docker.errors.ContainerError:
             logger.error(f"Execution failed for function {function.id}.")
             raise HTTPException(status_code=500, detail="Function execution failed")
