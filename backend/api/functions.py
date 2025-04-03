@@ -72,8 +72,8 @@ def execute_function(id: int, db: Session = Depends(get_db)):
     code_ext = config["code_ext"]
     run_command = config["run_command"]
 
-    # Prepare the directory and file
-    temp_dir = "./temp"
+    # Prepare a unique temp directory for the function execution
+    temp_dir = f"./temp/function_{function.id}"
     os.makedirs(temp_dir, exist_ok=True)
     temp_filename = os.path.join(temp_dir, f"function_{function.id}.{code_ext}")
 
@@ -84,35 +84,31 @@ def execute_function(id: int, db: Session = Depends(get_db)):
 
         logger.info(f"Executing function {function.id} in a {function.language} environment.")
 
-        # Run function inside a Docker container with proper syntax
+        # Run function inside a Docker container and capture logs
         try:
             container = client.containers.run(
                 image,
                 command=run_command,
                 volumes={os.path.abspath(temp_dir): {'bind': '/tmp', 'mode': 'rw'}},
-                detach=True,  # Run in background
-                remove=True,  # Remove container after execution
+                detach=False,  # Run synchronously
                 stdout=True,
                 stderr=True
             )
 
-            logs = container.logs().decode("utf-8")  # Capture logs
-            logger.info(f"Function {function.id} executed successfully. Output:\n{logs}")
+            logger.info(f"Function {function.id} executed successfully. Output:\n{container}")
 
-            return {"message": "Function executed successfully", "output": logs}
+            return {"message": "Function executed successfully", "output": container}
 
-        except docker.errors.ContainerError:
-            logger.error(f"Execution failed for function {function.id}.")
-            raise HTTPException(status_code=500, detail="Function execution failed")
-        except docker.errors.APIError:
-            logger.error("Docker API error occurred.")
-            raise HTTPException(status_code=500, detail="Docker API error")
+        except docker.errors.ContainerError as e:
+            logger.error(f"Execution failed for function {function.id}. Error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Function execution failed: {str(e)}")
+        except docker.errors.APIError as e:
+            logger.error(f"Docker API error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Docker API error: {str(e)}")
         except docker.errors.ImageNotFound:
             logger.error(f"Docker image {image} not found.")
             raise HTTPException(status_code=500, detail="Docker image not found")
 
     finally:
-        # Cleanup: Remove temporary code file
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        # Cleanup: Remove only this function's temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)

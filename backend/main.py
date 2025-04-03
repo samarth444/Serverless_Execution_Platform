@@ -89,24 +89,34 @@ async def list_functions():
     
     return {"message": "Available functions", "data": [f[0] for f in functions]}
 
+import shlex
+import docker
+
 def run_function_in_container(language: str, code: str, timeout: int):
-    """Execute function code inside a Docker container."""
+    """Execute function code inside a Docker container using a script file."""
     try:
         if language == "python":
             image = "python:3.9"
-            safe_code = code.replace('"', '\\"')  # Correct escaping
-            command = f'python -c "{safe_code}"'
+            command = "/bin/sh -c 'echo \"$CODE\" > script.py && python script.py'"
+            env_vars = {"CODE": code}
         elif language == "javascript":
             image = "node:18"
-            safe_code = code.replace('"', '\\"')
-            command = f'node -e "{safe_code}"'
+            command = "/bin/sh -c 'echo \"$CODE\" > script.js && node script.js'"
+            env_vars = {"CODE": code}
         else:
             return "Unsupported language"
 
         logger.info(f"Starting container for {language} function")
         container = docker_client.containers.run(
-            image, command, remove=False, stdout=True, stderr=True, detach=True
+            image, 
+            command, 
+            environment=env_vars,  # Pass code as an environment variable
+            remove=False, 
+            stdout=True, 
+            stderr=True, 
+            detach=True
         )
+        logger.info(f"Container ID: {container.id}")
 
         try:
             container.wait(timeout=timeout)  # Wait for completion
@@ -116,11 +126,13 @@ def run_function_in_container(language: str, code: str, timeout: int):
 
         logs = container.logs().decode("utf-8")
         container.remove()
-        logger.info("Function executed successfully")
+        logger.info(f"Function executed successfully, logs: {logs}")
         return logs.strip()
     except Exception as e:
         logger.error(f"Execution error: {str(e)}")
         return f"Execution error: {str(e)}"
+
+
 
 
 @app.post("/functions/execute")
