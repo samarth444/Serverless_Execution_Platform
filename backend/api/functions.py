@@ -2,10 +2,12 @@ import docker
 import os
 import shutil
 import logging
+import threading
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from db.database import SessionLocal
 from db.models import Function
+import time
 
 # Initialize router and Docker client
 router = APIRouter()
@@ -15,6 +17,11 @@ client = docker.from_env()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# In-memory container pool
+container_pool = {}
+POOL_SIZE = 2  # Number of pre-warmed containers per language
+MAX_CONTAINERS = 5  # Max containers per language before blocking new ones
+
 def get_db():
     """ Dependency to get DB session """
     db = SessionLocal()
@@ -22,6 +29,40 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# Function to initialize container pool
+def warm_up_containers():
+    """ Pre-starts a pool of function containers. """
+    languages = ["python", "javascript"]
+    for lang in languages:
+        container_pool[lang] = []
+        for _ in range(POOL_SIZE):
+            try:
+                container = start_container(lang)
+                if container:
+                    container_pool[lang].append(container)
+            except Exception as e:
+                logger.error(f"Failed to pre-warm {lang} container: {e}")
+
+# Function to start a new container
+def start_container(language: str):
+    """ Starts a new container for the given language. """
+    image_map = {"python": "python:3.9", "javascript": "node:18"}
+    run_cmd_map = {"python": "tail -f /dev/null", "javascript": "tail -f /dev/null"}
+
+    if language not in image_map:
+        raise ValueError("Unsupported language")
+
+    logger.info(f"Starting a new {language} container...")
+    container = client.containers.run(
+        image_map[language],
+        run_cmd_map[language],
+        detach=True,
+        stdin_open=True,
+        tty=True,
+        remove=False
+    )
+    return container
 
 @router.post("/functions/")
 def create_function(name: str, route: str, language: str, timeout: int, code: str, db: Session = Depends(get_db)):
@@ -50,65 +91,32 @@ def execute_function(id: int, db: Session = Depends(get_db)):
     if not function:
         raise HTTPException(status_code=404, detail="Function not found")
 
-    # Define image and file path based on language
-    language_config = {
-        "python": {
-            "image": "python:3.9",
-            "code_ext": "py",
-            "run_command": "python /tmp/function.py"
-        },
-        "javascript": {
-            "image": "node:18",
-            "code_ext": "js",
-            "run_command": "node /tmp/function.js"
-        }
-    }
-
-    if function.language.lower() not in language_config:
+    language = function.language.lower()
+    if language not in container_pool:
         raise HTTPException(status_code=400, detail="Unsupported language")
+    
+    if not container_pool[language]:
+        if len(container_pool[language]) < MAX_CONTAINERS:
+            container_pool[language].append(start_container(language))
+        else:
+            raise HTTPException(status_code=503, detail="Too many requests, no available containers")
 
-    config = language_config[function.language.lower()]
-    image = config["image"]
-    code_ext = config["code_ext"]
-    run_command = config["run_command"]
+    container = container_pool[language].pop(0)  # Get a free container
+    exec_result = execute_in_container(container, function.code, language)
+    container_pool[language].append(container)  # Return container to pool
+    return {"message": "Function executed successfully", "output": exec_result}
 
-    # Prepare a unique temp directory for the function execution
-    temp_dir = f"./temp/function_{function.id}"
-    os.makedirs(temp_dir, exist_ok=True)
-    temp_filename = os.path.join(temp_dir, f"function_{function.id}.{code_ext}")
-
+def execute_in_container(container, code: str, language: str):
+    """ Executes function code inside an existing container. """
     try:
-        # Write function code to a temporary file
-        with open(temp_filename, "w") as f:
-            f.write(function.code)
+        exec_cmd = "python -c \"" + code + "\"" if language == "python" else "node -e \"" + code + "\""
+        exit_code, output = container.exec_run(exec_cmd)
+        if exit_code != 0:
+            raise Exception(f"Execution failed: {output.decode('utf-8')}")
+        return output.decode("utf-8").strip()
+    except Exception as e:
+        logger.error(f"Execution error: {e}")
+        return str(e)
 
-        logger.info(f"Executing function {function.id} in a {function.language} environment.")
-
-        # Run function inside a Docker container and capture logs
-        try:
-            container = client.containers.run(
-                image,
-                command=run_command,
-                volumes={os.path.abspath(temp_dir): {'bind': '/tmp', 'mode': 'rw'}},
-                detach=False,  # Run synchronously
-                stdout=True,
-                stderr=True
-            )
-
-            logger.info(f"Function {function.id} executed successfully. Output:\n{container}")
-
-            return {"message": "Function executed successfully", "output": container}
-
-        except docker.errors.ContainerError as e:
-            logger.error(f"Execution failed for function {function.id}. Error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Function execution failed: {str(e)}")
-        except docker.errors.APIError as e:
-            logger.error(f"Docker API error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Docker API error: {str(e)}")
-        except docker.errors.ImageNotFound:
-            logger.error(f"Docker image {image} not found.")
-            raise HTTPException(status_code=500, detail="Docker image not found")
-
-    finally:
-        # Cleanup: Remove only this function's temp directory
-        shutil.rmtree(temp_dir, ignore_errors=True)
+# Start container warm-up in a background thread
+threading.Thread(target=warm_up_containers, daemon=True).start()

@@ -4,6 +4,7 @@ import docker
 import psycopg2
 import time
 import logging
+from threading import Lock
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -45,8 +46,40 @@ def create_table():
 
 create_table()  # Ensure table is created on startup
 
-# Docker Client
+# Docker Client & Container Pool
 docker_client = docker.from_env()
+POOL_SIZE = 5  # Number of pre-warmed containers
+container_pool = []
+pool_lock = Lock()
+
+# Function for warming up containers
+def warm_up_containers():
+    global container_pool
+    with pool_lock:
+        for _ in range(POOL_SIZE):
+            container = docker_client.containers.run(
+                "python:3.9",  # Default language
+                command="sleep infinity",
+                detach=True
+            )
+            container_pool.append(container)
+            logger.info(f"Warmed-up container: {container.id}")
+
+def get_available_container():
+    """Retrieve an available container from the pool."""
+    with pool_lock:
+        if container_pool:
+            return container_pool.pop(0)
+        else:
+            raise HTTPException(status_code=503, detail="No available containers. Try again later.")
+
+def return_container_to_pool(container):
+    """Return a used container back to the pool."""
+    with pool_lock:
+        if len(container_pool) < POOL_SIZE:
+            container_pool.append(container)
+
+warm_up_containers()  # Initialize warm-up on startup
 
 # Request model for function registration
 class FunctionRequest(BaseModel):
@@ -89,63 +122,11 @@ async def list_functions():
     
     return {"message": "Available functions", "data": [f[0] for f in functions]}
 
-import shlex
-import docker
-
-def run_function_in_container(language: str, code: str, timeout: int):
-    """Execute function code inside a Docker container using a script file."""
-    try:
-        if language == "python":
-            image = "python:3.9"
-            command = "/bin/sh -c 'echo \"$CODE\" > script.py && python script.py'"
-            env_vars = {"CODE": code}
-        elif language == "javascript":
-            image = "node:18"
-            command = "/bin/sh -c 'echo \"$CODE\" > script.js && node script.js'"
-            env_vars = {"CODE": code}
-        else:
-            return "Unsupported language"
-
-        logger.info(f"Starting container for {language} function")
-        container = docker_client.containers.run(
-            image, 
-            command, 
-            environment=env_vars,  # Pass code as an environment variable
-            remove=False, 
-            stdout=True, 
-            stderr=True, 
-            detach=True
-        )
-        logger.info(f"Container ID: {container.id}")
-        container_details = container.attrs
-        logger.info(f"Container Name: {container_details['Name']}")
-        logger.info(f"Image Used: {container_details['Config']['Image']}")
-        logger.info(f"Command Executed: {container_details['Config']['Cmd']}")
-        logger.info(f"Created At: {container_details['Created']}")
-        logger.info(f"Status: {container_details['State']['Status']}")
-        logger.info(f"Exit Code: {container_details['State']['ExitCode']}")
-        logger.info(f"Logs: {container.logs().decode('utf-8')}")
-        
-
-        try:
-            container.wait(timeout=timeout)  # Wait for completion
-        except docker.errors.ContainerError:
-            container.kill()
-            return "Execution timed out"
-
-        logs = container.logs().decode("utf-8")
-        #container.remove() this is removing the container, retain this
-        logger.info(f"Function executed successfully, logs: {logs}")
-        return logs.strip()
-    except Exception as e:
-        logger.error(f"Execution error: {str(e)}")
-        return f"Execution error: {str(e)}"
-
-
-
+import tarfile
+import io
 
 @app.post("/functions/execute")
-async def execute_function(request: dict, background_tasks: BackgroundTasks):
+async def execute_function(request: dict):
     """Execute a function asynchronously from the database."""
     function_name = request.get("name")
 
@@ -160,6 +141,32 @@ async def execute_function(request: dict, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=404, detail="Function not found")
 
     language, timeout, code = function
-    background_tasks.add_task(run_function_in_container, language, code, timeout)
+    container = get_available_container()
+    script_path = "/tmp/script.py"
 
-    return {"message": f"Execution started for function '{function_name}'"}
+    try:
+        logger.info(f"Executing function {function_name} in container {container.id}")
+
+        # Create a tar file with the script inside
+        tar_stream = io.BytesIO()
+        with tarfile.open(fileobj=tar_stream, mode="w") as tar:
+            script_data = io.BytesIO(code.encode("utf-8"))
+            tarinfo = tarfile.TarInfo(name="script.py")
+            tarinfo.size = len(script_data.getvalue())
+            tar.addfile(tarinfo, script_data)
+
+        tar_stream.seek(0)
+
+        # Copy the script to the container
+        container.put_archive("/tmp", tar_stream.read())
+
+        # Execute the script inside the container
+        exec_result = container.exec_run(f"python {script_path}", detach=False)
+        output = exec_result.output.decode("utf-8")
+    except Exception as e:
+        logger.error(f"Execution error: {str(e)}")
+        output = f"Execution error: {str(e)}"
+    finally:
+        return_container_to_pool(container)
+
+    return {"message": f"Execution completed for function '{function_name}'", "output": output}
