@@ -134,7 +134,7 @@ def run_function_in_container(language: str, code: str, timeout: int):
             return "Execution timed out"
 
         logs = container.logs().decode("utf-8")
-        container.remove()
+        #container.remove() this is removing the container, retain this
         logger.info(f"Function executed successfully, logs: {logs}")
         return logs.strip()
     except Exception as e:
