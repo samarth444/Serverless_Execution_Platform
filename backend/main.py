@@ -117,6 +117,15 @@ def run_function_in_container(language: str, code: str, timeout: int):
             detach=True
         )
         logger.info(f"Container ID: {container.id}")
+        container_details = container.attrs
+        logger.info(f"Container Name: {container_details['Name']}")
+        logger.info(f"Image Used: {container_details['Config']['Image']}")
+        logger.info(f"Command Executed: {container_details['Config']['Cmd']}")
+        logger.info(f"Created At: {container_details['Created']}")
+        logger.info(f"Status: {container_details['State']['Status']}")
+        logger.info(f"Exit Code: {container_details['State']['ExitCode']}")
+        logger.info(f"Logs: {container.logs().decode('utf-8')}")
+        
 
         try:
             container.wait(timeout=timeout)  # Wait for completion
