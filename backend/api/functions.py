@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from db.database import SessionLocal
 from db.models import Function
 import time
+from fastapi import Body
+
 
 # Initialize router and Docker client
 router = APIRouter()
@@ -118,38 +120,29 @@ def execute_in_container(container, code: str, language: str):
         logger.error(f"Execution error: {e}")
         return str(e)
 
-@router.put("/functions/{id}")
-def update_function(id: int, name: str = None, route: str = None, language: str = None, timeout: int = None, code: str = None, db: Session = Depends(get_db)):
-    """ Update an existing function's fields """
-    function = db.query(Function).filter(Function.id == id).first()
+@router.put("/functions/update")
+def update_function_by_name(name: str, code: str, db: Session = Depends(get_db)):
+    function = db.query(Function).filter(Function.name == name).first()
     if not function:
         raise HTTPException(status_code=404, detail="Function not found")
 
-    if name:
-        function.name = name
-    if route:
-        function.route = route
-    if language:
-        function.language = language
-    if timeout:
-        function.timeout = timeout
-    if code:
-        function.code = code
-
+    function.code = code  # Update other fields similarly if needed
     db.commit()
     db.refresh(function)
-    return {"message": "Function updated successfully", "function": function}
+    return {"message": f"Function '{name}' updated successfully", "function": function}
 
-@router.delete("/functions/{id}")
-def delete_function(id: int, db: Session = Depends(get_db)):
-    """ Delete a stored function from the database """
-    function = db.query(Function).filter(Function.id == id).first()
+
+@router.delete("/functions/delete")
+def delete_function_by_name(name: str, db: Session = Depends(get_db)):
+    function = db.query(Function).filter(Function.name == name).first()
     if not function:
         raise HTTPException(status_code=404, detail="Function not found")
 
     db.delete(function)
     db.commit()
-    return {"message": "Function deleted successfully"}
+    return {"message": f"Function '{name}' deleted successfully"}
+
+
 
 # Start container warm-up in a background thread
 threading.Thread(target=warm_up_containers, daemon=True).start()
