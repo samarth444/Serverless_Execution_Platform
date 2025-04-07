@@ -118,5 +118,38 @@ def execute_in_container(container, code: str, language: str):
         logger.error(f"Execution error: {e}")
         return str(e)
 
+@router.put("/functions/{id}")
+def update_function(id: int, name: str = None, route: str = None, language: str = None, timeout: int = None, code: str = None, db: Session = Depends(get_db)):
+    """ Update an existing function's fields """
+    function = db.query(Function).filter(Function.id == id).first()
+    if not function:
+        raise HTTPException(status_code=404, detail="Function not found")
+
+    if name:
+        function.name = name
+    if route:
+        function.route = route
+    if language:
+        function.language = language
+    if timeout:
+        function.timeout = timeout
+    if code:
+        function.code = code
+
+    db.commit()
+    db.refresh(function)
+    return {"message": "Function updated successfully", "function": function}
+
+@router.delete("/functions/{id}")
+def delete_function(id: int, db: Session = Depends(get_db)):
+    """ Delete a stored function from the database """
+    function = db.query(Function).filter(Function.id == id).first()
+    if not function:
+        raise HTTPException(status_code=404, detail="Function not found")
+
+    db.delete(function)
+    db.commit()
+    return {"message": "Function deleted successfully"}
+
 # Start container warm-up in a background thread
 threading.Thread(target=warm_up_containers, daemon=True).start()
