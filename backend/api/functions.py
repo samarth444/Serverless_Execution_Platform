@@ -120,17 +120,27 @@ def execute_in_container(container, code: str, language: str):
     except Exception as e:
         logger.error(f"Execution error: {e}")
         return str(e)
-
+from db.schemas import FunctionUpdate
 @router.put("/functions/update/{name}")
-def update_function_by_name(name: str, code: str, db: Session = Depends(get_db)):
+def update_function_by_name(name: str, payload: FunctionUpdate, db: Session = Depends(get_db)):
     function = db.query(Function).filter(Function.name == name).first()
     if not function:
         raise HTTPException(status_code=404, detail="Function not found")
 
-    function.code = code  # Update other fields similarly if needed
+    function.code = payload.code
     db.commit()
     db.refresh(function)
-    return {"message": f"Function '{name}' updated successfully", "function": function}
+    return {
+        "message": f"Function '{name}' updated successfully",
+        "function": {
+            "id": function.id,
+            "name": function.name,
+            "route": function.route,
+            "language": function.language,
+            "timeout": function.timeout,
+            "code": function.code
+        }
+    }
 
 
 @router.delete("/functions/delete/{name}")
