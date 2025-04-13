@@ -12,3 +12,4 @@ class Function(Base):
     language = Column(String, nullable=False)
     timeout = Column(Integer, default=5)
     code = Column(Text, nullable=False)
+
