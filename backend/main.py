@@ -5,10 +5,11 @@ import psycopg2
 import time
 import logging
 from threading import Lock
-
+from api.functions import router
 
 # Initialize FastAPI app
 app = FastAPI()
+app.include_router(router)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

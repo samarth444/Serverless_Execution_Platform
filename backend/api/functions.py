@@ -111,8 +111,8 @@ def execute_function(id: int, db: Session = Depends(get_db)):
 def execute_in_container(container, code: str, language: str):
     """ Executes function code inside an existing container. """
     try:
-        exec_cmd = "python -c \"" + code
-        + "\"" if language == "python" else "node -e \"" + code + "\""
+        exec_cmd = f'python -c "{code}"' if language == "python" else f'node -e "{code}"'
+
         exit_code, output = container.exec_run(exec_cmd)
         if exit_code != 0:
             raise Exception(f"Execution failed: {output.decode('utf-8')}")
