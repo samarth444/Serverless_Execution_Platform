@@ -6,10 +6,12 @@ import time
 import logging
 from threading import Lock
 from api.functions import router
+from api.metrics import router as metrics_router
 
 # Initialize FastAPI app
 app = FastAPI()
 app.include_router(router)
+app.include_router(metrics_router)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -67,8 +69,8 @@ def warm_up_containers():
             container_pool.append(container)
             logger.info(f"Warmed-up container: {container.id}")
 
-def get_available_container():
-    """Retrieve an available container from the pool."""
+def get_available_container(runtime: str = "runc"):
+    """Retrieve an available container from the pool, considering runtime."""
     with pool_lock:
         if container_pool:
             return container_pool.pop(0)
@@ -129,8 +131,10 @@ import io
 
 @app.post("/functions/execute")
 async def execute_function(request: dict):
-    """Execute a function asynchronously from the database."""
+    
+
     function_name = request.get("name")
+    runtime = request.get("runtime", "runc")
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -143,32 +147,74 @@ async def execute_function(request: dict):
         raise HTTPException(status_code=404, detail="Function not found")
 
     language, timeout, code = function
-    container = get_available_container()
+    container = get_available_container(runtime)
     script_path = "/tmp/script.py"
+    start_time = time.time()
 
     try:
-        logger.info(f"Executing function {function_name} in container {container.id}")
+        logger.info(f"Executing {function_name} in container {container.id} using runtime {runtime}")
 
-        # Create a tar file with the script inside
+        # Prepare and copy code
         tar_stream = io.BytesIO()
         with tarfile.open(fileobj=tar_stream, mode="w") as tar:
             script_data = io.BytesIO(code.encode("utf-8"))
             tarinfo = tarfile.TarInfo(name="script.py")
             tarinfo.size = len(script_data.getvalue())
             tar.addfile(tarinfo, script_data)
-
         tar_stream.seek(0)
-
-        # Copy the script to the container
         container.put_archive("/tmp", tar_stream.read())
 
-        # Execute the script inside the container
+        # Run script
         exec_result = container.exec_run(f"python {script_path}", detach=False)
+        exec_time = round(time.time() - start_time, 4)
+
+        # Collect Docker stats
+        stats = container.stats(stream=False)
+        mem_usage = round(stats["memory_stats"]["usage"] / (1024 * 1024), 2)
+        cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
+        system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
+        cpu_percent = round((cpu_delta / system_delta) * len(stats["cpu_stats"]["cpu_usage"]["percpu_usage"]) * 100, 2) if system_delta > 0 else 0.0
+
         output = exec_result.output.decode("utf-8")
+        success = exec_result.exit_code == 0
+
+        # Store metrics
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO metrics (function_name, runtime, response_time, memory_usage_mb, cpu_percentage, success)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (function_name, runtime, exec_time, mem_usage, cpu_percent, success))
+        conn.commit()
+        cur.close()
+        conn.close()
+
     except Exception as e:
         logger.error(f"Execution error: {str(e)}")
         output = f"Execution error: {str(e)}"
+        success = False
+        exec_time = round(time.time() - start_time, 4)
+
+        # Store failure metrics
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO metrics (function_name, runtime, response_time, memory_usage_mb, cpu_percentage, success)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (function_name, runtime, exec_time, 0.0, 0.0, False))
+        conn.commit()
+        cur.close()
+        conn.close()
+
     finally:
         return_container_to_pool(container)
 
-    return {"message": f"Execution completed for function '{function_name}'", "output": output}
+    return {
+        "message": f"Execution completed for function '{function_name}'",
+        "success": success,
+        "runtime": runtime,
+        "execution_time_sec": exec_time,
+        "cpu_percent": cpu_percent,
+        "memory_mb": mem_usage,
+        "output": output
+    }
