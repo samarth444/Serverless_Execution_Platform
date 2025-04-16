@@ -71,20 +71,51 @@ with st.form("deploy_form"):
         else:
             st.warning("⚠️ Please fill in all fields.")
 
-# --- List Functions ---
+from urllib.parse import quote  # for safe URL formatting
+
 st.header("📜 Available Functions")
+
 try:
     response = requests.get(f"{BASE_URL}/functions/")
     if response.ok:
-        if response.json().get("data"):
-            for fn in response.json().get("data", []):
-                st.code(fn, language="json")
+        functions = response.json().get("data", [])
+        if functions:
+            for fn in functions:
+                with st.expander(f"🔧 Manage Function: {fn}"):
+                    col1, col2 = st.columns(2)
+
+                    # 🔴 Delete Button
+                    if col1.button(f"🗑️ Delete `{fn}`", key=f"delete_{fn}"):
+                        delete_url = f"{BASE_URL}/functions/delete/{quote(fn)}"
+                        res = requests.delete(delete_url)
+                        if res.ok:
+                            st.success(f"✅ `{fn}` deleted successfully!")
+                            st.experimental_rerun()
+                        else:
+                            st.error(f"❌ Delete failed: {res.json().get('detail')}")
+
+                    # 🟢 Update Form
+                    with col2.form(f"update_form_{fn}"):
+                        st.markdown("**Update Function Code**")
+                        updated_code = st.text_area("Code", height=150, key=f"update_code_{fn}")
+                        update_submit = st.form_submit_button("📤 Update")
+
+                        if update_submit:
+                            payload = {"code": updated_code}
+                            update_url = f"{BASE_URL}/functions/update/{quote(fn)}"
+                            res = requests.put(update_url, json=payload)
+                            if res.ok:
+                                st.success(f"✅ `{fn}` updated successfully!")
+                            else:
+                                st.error(f"❌ Update failed: {res.json().get('detail')}")
         else:
-            st.info("ℹ️ No functions deployed yet.")
+            st.info("ℹ️ No deployed functions yet.")
     else:
-        st.error("❌ Could not fetch functions.")
+        st.error("❌ Failed to fetch functions list.")
 except Exception as e:
-    st.error(f"🚨 Error fetching function list: {e}")
+    st.error(f"🚨 Error: {e}")
+
+
 
 # --- Execute Function ---
 st.header("⚙️ Execute a Function")
