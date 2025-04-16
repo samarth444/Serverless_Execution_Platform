@@ -1,7 +1,7 @@
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "serverless",
+    "dbname": "function_db",
     "user": "postgres",
-    "password": "your_password",
+    "password": "samu2003",
+    "host": "localhost",
     "port": "5432"
 }
