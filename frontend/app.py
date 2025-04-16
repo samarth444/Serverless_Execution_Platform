@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 BASE_URL = "http://localhost:8000"
 
 st.set_page_config(page_title="Serverless Platform", layout="wide")
-st.markdown("<h1 style='text-align: center;'>🚀 Serverless Function Execution Platform</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center;'>☁️ Serverless Function Execution Platform</h1>", unsafe_allow_html=True)
 st.markdown("<h4 style='text-align: center;'>Built with Docker, gVisor, and FastAPI</h4>", unsafe_allow_html=True)
 
 st.markdown("""
@@ -29,24 +29,24 @@ st.markdown("""
 
 with st.expander("👨‍💻 Project Contributors"):
     st.markdown("""
-    - 🧑‍💻 **S Samartha**  
-    - 👩‍💻 **Pushpavathi**  
-    - 👩‍💻 **Preeti Madabbhavi**  
-    - 👩‍💻 **Thrisha M**
+    - 🧑‍💻 **S Samartha :     : PES1UG22CS492**  
+    - 👩‍💻 **Pushpavathi      : PES1UG22CS459**  
+    - 👩‍💻 **Preeti Madabbhavi: PES1UG22CS449**  
+    - 👩‍💻 **Thrisha M        : PES1UG23CS834**
     """)
 
 # --- Deploy Function ---
-st.header("📤 Deploy a New Function")
+st.header("🚀 Deploy a New Function")
 with st.form("deploy_form"):
-    st.subheader("🔧 Function Configuration")
+    st.subheader("💡 Function Configuration")
     col1, col2 = st.columns(2)
     with col1:
         name = st.text_input("📝 Function Name")
         route = st.text_input("🛣️ Route", "/your_route")
     with col2:
-        language = st.selectbox("🧪 Language", ["python"])
+        language = st.selectbox("💻 Language", ["python"])
         timeout = st.slider("⏱️ Timeout (seconds)", 1, 30, 5)
-    code = st.text_area("💻 Code", "print('Hello from serverless')", height=200)
+    code = st.text_area("🧾 Code", "print('Hello from serverless')", height=200)
     submitted = st.form_submit_button("🚀 Deploy Function")
 
     if submitted:
@@ -92,7 +92,7 @@ col_exec_1, col_exec_2 = st.columns([3, 1])
 with col_exec_1:
     exec_name = st.text_input("🎯 Function Name to Execute")
 with col_exec_2:
-    runtime = st.selectbox("🧱 Runtime", ["runc", "runsc"])
+    runtime = st.selectbox("🧬 Runtime", ["runc", "runsc"])
 
 if st.button("▶️ Run Function"):
     try:
